@@ -1,0 +1,10 @@
+[package]
+name = "makcu"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serialport = { version = "4.7.2", default-features = false }
+thiserror = "2.0.12"
+tokio = { version = "1.46.1", features = ["full"] }
+tracing = "0.1.41"
