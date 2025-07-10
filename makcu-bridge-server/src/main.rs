@@ -27,9 +27,9 @@ async fn main() {
         .init();
 
     if let Err(err) = start().await {
-        let error_chain = std::iter::successors(err.source(), |err| err.source())
+        let str = std::iter::successors(err.source(), |err| err.source())
             .fold(err.to_string(), |acc, err| format!("{acc}: {err}"));
-        tracing::error!("{error_chain}");
+        tracing::error!("{str}");
     }
 }
 
