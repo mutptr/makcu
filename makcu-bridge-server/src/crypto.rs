@@ -1,17 +1,17 @@
 use chacha20poly1305::{
-    Key, KeyInit, XChaCha20Poly1305,
+    ChaCha20Poly1305, Key, KeyInit,
     aead::{Aead, OsRng, generic_array::GenericArray},
 };
 
 pub struct CryptoManager {
     key: Key,
-    cipher: XChaCha20Poly1305,
+    cipher: ChaCha20Poly1305,
 }
 
 impl CryptoManager {
     pub fn new() -> Self {
-        let key = XChaCha20Poly1305::generate_key(&mut OsRng);
-        let cipher = XChaCha20Poly1305::new(&key);
+        let key = ChaCha20Poly1305::generate_key(&mut OsRng);
+        let cipher = ChaCha20Poly1305::new(&key);
         Self { key, cipher }
     }
 

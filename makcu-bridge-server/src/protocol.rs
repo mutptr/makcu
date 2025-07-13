@@ -31,7 +31,7 @@ impl_decode!(Payload);
 #[repr(C)]
 #[derive(Debug, bincode::Decode)]
 pub struct Packet {
-    pub nonce: [u8; 24],
+    pub nonce: [u8; 12],
     pub data: Vec<u8>,
 }
 
