@@ -32,8 +32,10 @@ impl Server {
             let handler = Arc::clone(&self.handler);
 
             tokio::spawn(async move {
-                if let Err(e) = Self::handle_client_request(socket, handler, data, from).await {
-                    tracing::error!(%from, "{e}");
+                if let Err(err) = Self::handle_client_request(socket, handler, data, from).await {
+                    let str = std::iter::successors(err.source(), |err| err.source())
+                        .fold(err.to_string(), |acc, err| format!("{acc}: {err}"));
+                    tracing::error!(%from, "{str}");
                 }
             });
         }
