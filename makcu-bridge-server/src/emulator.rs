@@ -18,7 +18,7 @@ pub struct InputEmulator {
 
 impl InputEmulator {
     pub fn new(makcu: Makcu) -> Arc<Self> {
-        let (pending_tx, pending_rx) = mpsc::channel::<()>(1);
+        let (pending_tx, pending_rx) = mpsc::channel::<()>(100);
         let is_locked = AtomicBool::new(false);
         let is_pending = AtomicBool::new(false);
         let current_press = AtomicBool::new(false);

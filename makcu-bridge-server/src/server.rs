@@ -81,6 +81,7 @@ impl Server {
             let key = *key_state.borrow();
 
             if key >> 2 & 1 == 1 {
+                _ = self.makcu.release().await;
                 _ = self.makcu.unlock_ml().await;
             }
         }
