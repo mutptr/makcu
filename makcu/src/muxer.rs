@@ -1,113 +1,166 @@
-use tokio::sync::{mpsc, oneshot};
+use serialport::SerialPort;
+use tokio::sync::{mpsc, oneshot, watch};
 
-use crate::Result;
+use crate::serial::{serial_read, serial_write};
 
 #[derive(Debug)]
 enum Command {
     Write {
         data: Vec<u8>,
-        tx: oneshot::Sender<Result<()>>,
     },
     WriteRead {
         data: Vec<u8>,
-        tx: oneshot::Sender<Result<String>>,
+        tx: oneshot::Sender<String>,
     },
     Close,
 }
 
-pub struct Muxer {
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("io timeout")]
+    IoTimeout,
+    #[error("channel closed")]
+    ChannelClosed,
+    #[error(transparent)]
+    Io(std::io::Error),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        if e.kind() == std::io::ErrorKind::TimedOut {
+            Error::IoTimeout
+        } else {
+            Error::Io(e)
+        }
+    }
+}
+
+impl From<mpsc::error::SendError<Command>> for Error {
+    fn from(_: mpsc::error::SendError<Command>) -> Self {
+        Error::ChannelClosed
+    }
+}
+
+impl From<oneshot::error::RecvError> for Error {
+    fn from(_: oneshot::error::RecvError) -> Self {
+        Error::ChannelClosed
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct Muxer {
     tx: mpsc::Sender<Command>,
+    watch_tx: watch::Sender<u8>,
 }
 
 impl Muxer {
-    pub fn new(mut com: Box<dyn serialport::SerialPort>) -> Self {
-        let (tx, mut rx) = mpsc::channel(100);
+    pub fn new(com: Box<dyn SerialPort>) -> Self {
+        let (tx, rx) = mpsc::channel(32);
+        let (watch_tx, _) = watch::channel(0);
 
-        // tokio::task::spawn(async move {
-        //     while let Some(cmd) = rx.recv().await {
-        //         match cmd {
-        //             Command::Write { data, tx } => {
-        //                 let result = tokio::task::block_in_place(|| {
-        //                     com.write_all(&data)?;
-        //                     Ok(())
-        //                 });
-        //                 let _ = tx.send(result);
-        //             }
-        //             Command::WriteRead { data, tx } => {
-        //                 let result = tokio::task::block_in_place(|| {
-        //                     com.write_all(&data)?;
-        //                     let mut buf = [0; 16];
-        //                     let len = com.read(&mut buf)?;
-        //                     Ok(String::from_utf8_lossy(&buf[..len]).into_owned())
-        //                 });
-        //                 let _ = tx.send(result);
-        //             }
-        //             Command::Close => break,
-        //         }
-        //     }
-        //     drop(com);
-        //     tracing::debug!("Muxer 채널 닫힘");
-        // });
+        spawn_serial_worker(com, rx, watch_tx.clone());
 
-        std::thread::spawn(move || {
-            while let Some(cmd) = rx.blocking_recv() {
-                tracing::debug!("Received command");
-                let _ = com.clear(serialport::ClearBuffer::All);
-                match cmd {
-                    Command::Write { data, tx } => {
-                        let result = (|| {
-                            com.write_all(&data)?;
-                            Ok(())
-                        })();
-                        let _ = tx.send(result);
-                    }
-                    Command::WriteRead { data, tx } => {
-                        let result = (|| {
-                            com.write_all(&data)?;
-
-                            let mut res = vec![];
-                            while !res.ends_with(b"\r\n>>> ") {
-                                let mut buf = [0; 4 * 1024];
-                                let len = com.read(&mut buf)?;
-                                res.extend_from_slice(&buf[..len]);
-                            }
-                            Ok(String::from_utf8_lossy(&res).into_owned())
-                        })();
-                        let _ = tx.send(result);
-                    }
-                    Command::Close => break,
-                }
-            }
-            drop(com);
-            tracing::debug!("Muxer 채널 닫힘");
-        });
-
-        Self { tx }
+        Self { tx, watch_tx }
     }
 
     pub async fn write(&self, data: impl Into<Vec<u8>>) -> Result<()> {
-        let (tx, rx) = oneshot::channel();
-        let cmd = Command::Write {
-            data: data.into(),
-            tx,
-        };
-        self.tx.send(cmd).await?;
-        rx.await?
+        self.tx.send(Command::Write { data: data.into() }).await?;
+        Ok(())
     }
 
     pub async fn write_read(&self, data: impl Into<Vec<u8>>) -> Result<String> {
         let (tx, rx) = oneshot::channel();
-        let cmd = Command::WriteRead {
-            data: data.into(),
-            tx,
-        };
-        self.tx.send(cmd).await?;
-        rx.await?
+        self.tx
+            .send(Command::WriteRead {
+                data: data.into(),
+                tx,
+            })
+            .await?;
+
+        let response = rx.await?;
+        Ok(response)
     }
 
-    pub async fn close(self) -> Result<()> {
+    pub fn subscribe_buttons(&self) -> watch::Receiver<u8> {
+        self.watch_tx.subscribe()
+    }
+
+    pub async fn close(&self) -> Result<()> {
         self.tx.send(Command::Close).await?;
         self.tx.closed().await;
         Ok(())
+    }
+}
+
+fn spawn_serial_worker(
+    mut com: Box<dyn SerialPort>,
+    mut rx: mpsc::Receiver<Command>,
+    watch_tx: watch::Sender<u8>,
+) {
+    std::thread::spawn(move || {
+        loop {
+            match run_serial_loop(&mut com, &mut rx, &watch_tx) {
+                Ok(()) => continue,
+                Err(Error::IoTimeout) => continue,
+                Err(e) => {
+                    tracing::debug!("run_serial_loop error: {e:?}");
+                    break;
+                }
+            }
+        }
+
+        drop(com);
+        tracing::debug!("Serial worker closed");
+    });
+}
+
+fn poll_buttons(
+    com: &mut Box<dyn serialport::SerialPort>,
+    watch_tx: &watch::Sender<u8>,
+) -> Result<()> {
+    match serial_read(com) {
+        Ok(str) => {
+            let bytes = str.as_bytes();
+            tracing::debug!("serial_read: {str}");
+            // km.<byte>
+            if bytes.len() == 4 && bytes.starts_with(b"km.") && bytes[3] < 32 {
+                tracing::debug!("buttons: {}", bytes[3]);
+                _ = watch_tx.send(bytes[3]);
+            }
+            Ok(())
+        }
+        Err(Error::IoTimeout) => Ok(()), // timeout은 정상적인 상황
+        Err(e) => Err(e),
+    }
+}
+
+fn handle_command(com: &mut Box<dyn serialport::SerialPort>, cmd: Command) -> Result<()> {
+    match cmd {
+        Command::Write { data } => serial_write(com, &data),
+        Command::WriteRead { data, tx } => {
+            serial_write(com, &data)?;
+            let read_result = serial_read(com)?;
+            tracing::debug!("Read data: {read_result}");
+            _ = tx.send(read_result);
+            Ok(())
+        }
+        Command::Close => {
+            tracing::debug!("Command::Close");
+            Err(Error::ChannelClosed)
+        }
+    }
+}
+
+fn run_serial_loop(
+    com: &mut Box<dyn serialport::SerialPort>,
+    rx: &mut mpsc::Receiver<Command>,
+    watch_tx: &watch::Sender<u8>,
+) -> Result<()> {
+    match rx.try_recv() {
+        Ok(cmd) => handle_command(com, cmd),
+        Err(mpsc::error::TryRecvError::Empty) => poll_buttons(com, watch_tx),
+        Err(mpsc::error::TryRecvError::Disconnected) => Err(Error::ChannelClosed),
     }
 }
