@@ -29,10 +29,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
-        if e.kind() == std::io::ErrorKind::TimedOut {
-            Error::IoTimeout
-        } else {
-            Error::Io(e)
+        match e.kind() {
+            std::io::ErrorKind::TimedOut => Error::IoTimeout,
+            _ => Error::Io(e),
         }
     }
 }
@@ -120,20 +119,17 @@ fn poll_buttons(
     com: &mut Box<dyn serialport::SerialPort>,
     watch_tx: &watch::Sender<u8>,
 ) -> Result<()> {
-    match serial_read(com) {
-        Ok(str) => {
-            let bytes = str.as_bytes();
-            tracing::debug!("serial_read: {str}");
-            // km.<byte>
-            if bytes.len() == 4 && bytes.starts_with(b"km.") && bytes[3] < 32 {
-                tracing::debug!("buttons: {}", bytes[3]);
-                _ = watch_tx.send(bytes[3]);
-            }
-            Ok(())
+    let responses = serial_read(com)?;
+    for response in responses {
+        let bytes = response.as_bytes();
+        tracing::debug!("serial_read: {response}");
+        // km.<byte>
+        if bytes.len() == 4 && bytes.starts_with(b"km.") && bytes[3] < 32 {
+            tracing::debug!("buttons: {}", bytes[3]);
+            _ = watch_tx.send(bytes[3]);
         }
-        Err(Error::IoTimeout) => Ok(()), // timeout은 정상적인 상황
-        Err(e) => Err(e),
     }
+    Ok(())
 }
 
 fn handle_command(com: &mut Box<dyn serialport::SerialPort>, cmd: Command) -> Result<()> {
@@ -141,7 +137,8 @@ fn handle_command(com: &mut Box<dyn serialport::SerialPort>, cmd: Command) -> Re
         Command::Write { data } => serial_write(com, &data),
         Command::WriteRead { data, tx } => {
             serial_write(com, &data)?;
-            let read_result = serial_read(com)?;
+            let read_results = serial_read(com)?;
+            let read_result = read_results.into_iter().next().unwrap_or_default();
             tracing::debug!("Read data: {read_result}");
             _ = tx.send(read_result);
             Ok(())

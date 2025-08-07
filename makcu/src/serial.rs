@@ -7,19 +7,32 @@ pub fn serial_write(com: &mut Box<dyn SerialPort>, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-pub fn serial_read(com: &mut Box<dyn SerialPort>) -> Result<String> {
+pub fn serial_read(com: &mut Box<dyn SerialPort>) -> Result<Vec<String>> {
     const SUFFIX: &str = "\r\n>>> ";
-    let mut res: Vec<u8> = vec![];
-    while !res.ends_with(SUFFIX.as_bytes()) {
-        let mut buf = [0; 1];
-        com.read_exact(&mut buf)?;
-        res.push(buf[0]);
+    const MAX_BUFFER_SIZE: usize = 4096;
 
-        if res.len() > 1024 {
-            res.clear();
+    let mut buf = Vec::new();
+    let mut temp_buf = [0u8; 1024];
+
+    while !buf.ends_with(SUFFIX.as_bytes()) {
+        let n = match com.read(&mut temp_buf) {
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
+            Err(e) => return Err(e.into()),
+        };
+
+        buf.extend_from_slice(&temp_buf[..n]);
+
+        if buf.len() > MAX_BUFFER_SIZE {
+            buf.clear();
         }
     }
-    Ok(String::from_utf8_lossy(&res)
-        .trim_end_matches(SUFFIX)
-        .to_owned())
+
+    let str = String::from_utf8_lossy(&buf);
+
+    Ok(str
+        .split(SUFFIX)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.trim_end_matches(SUFFIX).to_owned())
+        .collect())
 }
