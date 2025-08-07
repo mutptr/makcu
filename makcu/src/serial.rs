@@ -24,7 +24,7 @@ pub fn serial_read(com: &mut Box<dyn SerialPort>) -> Result<Vec<String>> {
         buf.extend_from_slice(&temp_buf[..n]);
 
         if buf.len() > MAX_BUFFER_SIZE {
-            buf.clear();
+            break;
         }
     }
 
