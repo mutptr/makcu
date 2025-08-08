@@ -48,6 +48,7 @@ impl InputEmulator {
         let was_locked = self.is_locked.swap(true, Ordering::AcqRel);
         if !was_locked {
             self.makcu.lock_ml().await?;
+            self.makcu.lock_ms1().await?;
         }
         Ok(())
     }
@@ -56,17 +57,17 @@ impl InputEmulator {
         let was_locked = self.is_locked.swap(false, Ordering::AcqRel);
         if was_locked {
             self.makcu.unlock_ml().await?;
+            self.makcu.unlock_ms1().await?;
             self.release().await?;
         }
         Ok(())
     }
 
     pub async fn pending(&self, pending: bool) -> anyhow::Result<()> {
-        if pending {
-            self.is_pending.store(true, Ordering::Release);
+        let was_pending = self.is_pending.swap(pending, Ordering::AcqRel);
+        if was_pending {
             _ = self.pending_tx.send(()).await;
         } else {
-            self.is_pending.store(false, Ordering::Release);
             self.sync_current_state().await;
         }
         Ok(())
@@ -121,7 +122,16 @@ async fn userpress_task(mut key_state: watch::Receiver<u8>, emulator: Arc<InputE
             continue;
         }
 
-        if emulator.is_pending.load(Ordering::Acquire) {
+        let ms1_press = key >> 3 & 1 == 1;
+        let user_press = user_press || ms1_press;
+        emulator.user_press.store(user_press, Ordering::Release);
+
+        if ms1_press {
+            emulator.sync_current_state().await;
+            continue;
+        }
+
+        if user_press && emulator.is_pending.load(Ordering::Acquire) {
             continue;
         }
 

@@ -136,6 +136,18 @@ impl<B: BaudRate> Makcu<B> {
         Ok(())
     }
 
+    pub async fn lock_ms1(&self) -> Result<()> {
+        let command = "km.lock_ms1(1)\r";
+        self.muxer.write(command).await?;
+        Ok(())
+    }
+
+    pub async fn unlock_ms1(&self) -> Result<()> {
+        let command = "km.lock_ms1(0)\r";
+        self.muxer.write(command).await?;
+        Ok(())
+    }
+
     pub async fn enable_buttons(&self) -> Result<()> {
         let command = "km.buttons(1)\r";
         self.muxer.write(command).await?;
