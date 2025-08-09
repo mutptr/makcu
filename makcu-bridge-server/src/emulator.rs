@@ -65,10 +65,12 @@ impl InputEmulator {
 
     pub async fn pending(&self, pending: bool) -> anyhow::Result<()> {
         let was_pending = self.is_pending.swap(pending, Ordering::AcqRel);
-        if was_pending {
-            _ = self.pending_tx.send(()).await;
-        } else {
+        if !was_pending {
             self.sync_current_state().await;
+        }
+
+        if pending {
+            _ = self.pending_tx.send(()).await;
         }
         Ok(())
     }
@@ -124,9 +126,8 @@ async fn userpress_task(mut key_state: watch::Receiver<u8>, emulator: Arc<InputE
 
         let ms1_press = key >> 3 & 1 == 1;
         let user_press = user_press || ms1_press;
-        emulator.user_press.store(user_press, Ordering::Release);
-
         if ms1_press {
+            emulator.user_press.store(user_press, Ordering::Release);
             emulator.sync_current_state().await;
             continue;
         }
