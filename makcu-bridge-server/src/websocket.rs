@@ -71,8 +71,8 @@ async fn handle_receiver(
 ) -> anyhow::Result<()> {
     loop {
         match receiver.next().await {
-            Some(Ok(Message::Text(text))) => {
-                handle_text_message(&text, &state).await?;
+            Some(Ok(Message::Binary(bytes))) => {
+                handle_message(&bytes, &state).await?;
             }
             Some(Ok(Message::Close(_))) => break,
             Some(Err(_)) => break,
@@ -102,8 +102,8 @@ enum Command {
     Click,
 }
 
-async fn handle_text_message(text: &str, state: &AppState) -> anyhow::Result<()> {
-    if let Ok(command) = serde_json::from_str::<Command>(text) {
+async fn handle_message(text: &[u8], state: &AppState) -> anyhow::Result<()> {
+    if let Ok(command) = rmp_serde::from_slice::<Command>(text) {
         match command {
             Command::MouseMove { a, b } => {
                 tracing::debug!(x = a, y = b, "마우스 이동");
