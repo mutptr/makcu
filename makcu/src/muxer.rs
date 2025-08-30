@@ -123,10 +123,13 @@ fn poll_buttons(
     for response in responses {
         let bytes = response.as_bytes();
         tracing::debug!("serial_read: {response}");
-        // km.<byte>
-        if bytes.len() == 4 && bytes.starts_with(b"km.") && bytes[3] < 32 {
-            tracing::debug!("buttons: {}", bytes[3]);
-            _ = watch_tx.send(bytes[3]);
+        // km.buttons()\n<mask>
+        let prefix = b"km.buttons()\n";
+        if bytes.starts_with(prefix) {
+            if let Some(&button) = bytes.get(prefix.len()) {
+                tracing::debug!("buttons: {}", button);
+                _ = watch_tx.send(button);
+            }
         }
     }
     Ok(())
